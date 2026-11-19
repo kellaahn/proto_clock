@@ -3,7 +3,7 @@ const W = 1920;
 const H = 1080;
 
 // ===== 시계 레이아웃 =====
-const CLOCK_X = 960;      // 시계 중심 (= 바늘 축)
+const CLOCK_X = 960;      // 시계 중심
 const CLOCK_Y = 540;
 const TILE = 229.6;       // 검은 사각형 한 칸 크기 = 눈 간격
 
@@ -21,15 +21,9 @@ const SPIKE_COUNT = 17;
 const SPIKE_LEN = 67;       // 사각형 변에서 끝까지 길이
 const SPIKE_BASE = 3.6;     // 뿌리 쪽 굵기
 const SPIKE_INSET = 12;     // 사각형 양 끝에서 들여쓴 거리
+const EDGE_SPIKE_LEN = 71;  // 화면 양쪽 끝 가로 가시 길이
+const EDGE_SPIKE_BASE = 5;  // 〃 화면 끝 쪽 굵기
 
-// ===== 바늘 =====
-const HUB_R = 33;           // 가운데 축 원 반지름
-const MIN_LEN = 318;        // 분침 길이
-const MIN_BASE = 12;        // 분침 뿌리 굵기
-const MIN_TIP = 3;          // 분침 끝 굵기
-const HOUR_LEN = 150;       // 시침 길이
-const HOUR_BASE = 9;
-const HOUR_TIP = 1;
 
 // ===== 색상 =====
 const C_BG = '#FFFFFF';
@@ -45,6 +39,13 @@ const PUPIL_R = 39.75; // 동공 반지름
 const HL_X = 29.5;     // 하이라이트 오프셋
 const HL_Y = -33.6;
 const HL_R = 14.9;     // 하이라이트 반지름
+
+// ===== 동공 속 숫자 (원본 배율) =====
+const C_NUM = '#FFFFFF';
+const NUM_FONT = 'Helvetica Neue, Helvetica, Arial, sans-serif';
+const NUM_SIZE_1 = 44;    // 한 자리 숫자 크기
+const NUM_SIZE_2 = 36;    // 두 자리 숫자(10, 11, 12) 크기
+const NUM_OFFSET_Y = 3;   // 세로 가운데 맞춤 보정
 
 // 빨간 테두리 / 흰자 윤곽: 눈 중심에서 1° 간격(0°=오른쪽, 시계방향)으로 잰 반지름 (원본 배율)
 const RED_PROFILE = [
@@ -161,11 +162,23 @@ const eyes = [];
 const target = { x: W / 2, y: H / 2, d: VIEW_DIST };
 let showDebug = false;
 
-// ?time=10:08 처럼 주면 그 시각에서 시작해 흘러감 (촬영·테스트용)
-let timeOffsetMs = 0;
+// 창 크기 → 1920×1080 그래픽을 비율 유지해 가운데 맞춤하는 배율과 여백
+const view = { s: 1, ox: 0, oy: 0 };
+
+function fitView() {
+  view.s = Math.min(width / W, height / H);
+  view.ox = (width - W * view.s) / 2;
+  view.oy = (height - H * view.s) / 2;
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  fitView();
+}
 
 function setup() {
-  createCanvas(W, H);
+  createCanvas(windowWidth, windowHeight);
+  fitView();
   pixelDensity(2);
   noStroke();
 
@@ -174,20 +187,11 @@ function setup() {
 
   for (const [gx, gy] of HOUR_POS) {
     eyes.push({
+      label: '',       // 동공에 쓸 숫자 (매 프레임 시간에 따라 정해짐)
       x: CLOCK_X + gx * TILE,
       y: CLOCK_Y + gy * TILE,
-      top: gy <= 0,    // 위쪽 가시
-      bottom: gy >= 0, // 아래쪽 가시 (3시·9시는 위아래 둘 다)
       g: [0, 0, 1],    // 시선 방향 단위벡터 (z 가 화면 밖, 관객 쪽)
     });
-  }
-
-  const q = new URLSearchParams(location.search).get('time');
-  const m = q && q.match(/^(\d{1,2}):(\d{2})$/);
-  if (m) {
-    const d = new Date();
-    d.setHours(+m[1], +m[2], 0, 0);
-    timeOffsetMs = d.getTime() - Date.now();
   }
 }
 
@@ -196,8 +200,20 @@ function draw() {
   updateTarget();
   updateBlink();
 
+  push();
+  translate(view.ox, view.oy);
+  scale(view.s);
+
+  const crop = showFaces ? updateFaceCrop() : null;
+  if (showFaces) drawCenterFace(crop);
+
   fill(C_PANEL);
+  drawEdgeSpikes();
   for (const e of eyes) drawTile(e);
+
+  // 레이어 순서: 가운데 얼굴 → 가시·검은 칸 → 작은 얼굴 사각형 → 눈알(맨 위)
+  const lit = timeSlots();
+  if (showFaces) drawSatFaces(crop, lit);
 
   // 빨간 테두리를 먼저 모두 깔아둠
   fill(C_RED);
@@ -209,19 +225,20 @@ function draw() {
     pop();
   }
 
-  for (const e of eyes) {
+  eyes.forEach((e, i) => {
+    e.label = lit.get(i) || ''; // 시간 칸이 아니면 숫자 없음
     updateGaze(e);
     push();
     translate(e.x, e.y);
     scale(EYE_SCALE);
     drawEye(e);
     if (lidClose > 0.001) drawLids(lidClose);
+    if (lit.has(i)) tintEye();
     pop();
-  }
-
-  drawHands();
+  });
 
   if (showDebug) drawDebug();
+  pop();
   drawCamPreview();
 }
 
@@ -235,37 +252,195 @@ function drawTile(e) {
   const w = SPIKE_BASE / 2;
   for (let i = 0; i < SPIKE_COUNT; i++) {
     const x = x0 + i * step;
-    if (e.top) {
-      const y = e.y - h + 1;
-      triangle(x - w, y, x + w, y, x, y - SPIKE_LEN);
-    }
-    if (e.bottom) {
-      const y = e.y + h - 1;
-      triangle(x - w, y, x + w, y, x, y + SPIKE_LEN);
+    // 모든 칸에 위·아래 가시 (안쪽 칸 사이에선 위아래 가시가 끝끼리 거의 맞닿음)
+    const yt = e.y - h + 1;
+    triangle(x - w, yt, x + w, yt, x, yt - SPIKE_LEN);
+    const yb = e.y + h - 1;
+    triangle(x - w, yb, x + w, yb, x, yb + SPIKE_LEN);
+  }
+}
+
+// ===== 화면 왼쪽·오른쪽 끝의 가로 가시 =====
+// 칸 크기(TILE)만큼씩 17개 묶음으로, 시계 중심 높이를 기준으로 묶음 사이에 살짝 틈이 생김
+// 창이 16:9 보다 넓거나 좁아도 실제 창의 좌우 벽 끝에 붙고, 위아래도 창 끝까지 채움
+function drawEdgeSpikes() {
+  const left = -view.ox / view.s;
+  const right = W + view.ox / view.s;
+  const top = -view.oy / view.s;
+  const bottom = H + view.oy / view.s;
+
+  const step = (TILE - 2 * SPIKE_INSET) / (SPIKE_COUNT - 1);
+  const w = EDGE_SPIKE_BASE / 2;
+  const kMin = Math.floor((top - CLOCK_Y) / TILE) - 1;
+  const kMax = Math.ceil((bottom - CLOCK_Y) / TILE);
+  for (let k = kMin; k <= kMax; k++) {
+    const y0 = CLOCK_Y + k * TILE + SPIKE_INSET;
+    for (let i = 0; i < SPIKE_COUNT; i++) {
+      const y = y0 + i * step;
+      if (y < top - w || y > bottom + w) continue;
+      triangle(left, y - w, left, y + w, left + EDGE_SPIKE_LEN, y);
+      triangle(right, y - w, right, y + w, right - EDGE_SPIKE_LEN, y);
     }
   }
 }
 
-// ===== 시침 · 분침 =====
-function drawHands() {
-  const now = new Date(Date.now() + timeOffsetMs);
-  const sec = now.getSeconds() + now.getMilliseconds() / 1000;
-  const min = now.getMinutes() + sec / 60;
-  const hr = (now.getHours() % 12) + min / 60;
+// ===== 얼굴 사각형 =====
+// 카메라에서 얼굴 부분만 정사각형으로 잘라서
+//  1) 시계 가운데 큰 정사각형 (눈 칸과 같은 크기)
+//  2) 각 눈 칸 바깥쪽 모서리에 꼭짓점이 맞닿는 작은 정사각형 12개
+// 에 보여줌. 작은 사각형 중 지금 시·분에 해당하는 두 칸은 파란색 (아래 '시간 표시' 참고)
+const CENTER_FACE = TILE;          // 가운데 정사각형 한 변
+const SAT_FACE = TILE * 0.48;      // 바깥 작은 정사각형 한 변
+const FACE_ZOOM = 1.7;             // 얼굴 크기 대비 잘라낼 크기 (작을수록 얼굴이 크게)
+const FACE_SMOOTH = 0.15;          // 잘라내는 영역이 얼굴을 따라가는 부드러움
+let showFaces = true;              // C 키로 켜기/끄기
+let faceCrop = null;               // { cx, cy, side } 카메라 픽셀 단위
 
-  fill(C_PANEL);
-  drawHand((hr / 12) * TWO_PI, HOUR_LEN, HOUR_BASE, HOUR_TIP);
-  drawHand((min / 60) * TWO_PI, MIN_LEN, MIN_BASE, MIN_TIP);
-  circle(CLOCK_X, CLOCK_Y, HUB_R * 2);
+// 작은 사각형 중심: 눈 칸 중심에서 바깥쪽(시계 중심 반대) 대각/수평/수직으로
+// (칸 반 + 작은 사각형 반) 만큼 → 두 사각형의 모서리가 정확히 맞닿음
+function satCenter(e, gx, gy) {
+  const d = TILE / 2 + SAT_FACE / 2;
+  return { x: e.x + Math.sign(gx) * d, y: e.y + Math.sign(gy) * d };
 }
 
-// angle: 0 = 12시 방향, 시계방향
-function drawHand(angle, len, base, tip) {
-  push();
-  translate(CLOCK_X, CLOCK_Y);
-  rotate(angle);
-  quad(-base / 2, 0, base / 2, 0, tip / 2, -len, -tip / 2, -len);
-  pop();
+// 이번 프레임에 잘라낼 카메라 영역 계산 (영상 준비 전이면 null)
+function updateFaceCrop() {
+  const t = window.faceTracker;
+  const v = t && t.video;
+  if (!v || v.readyState < 2 || !v.videoWidth) return null;
+  const VW = v.videoWidth;
+  const VH = v.videoHeight;
+
+  // 목표 영역: 얼굴이 잡히면 얼굴 둘레, 아니면 화면 가운데 정사각형
+  let goal = { cx: VW / 2, cy: VH / 2, side: Math.min(VW, VH) };
+  if (t.found && t.landmarks) {
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    for (const p of t.landmarks) {
+      if (p.x < x0) x0 = p.x;
+      if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y;
+      if (p.y > y1) y1 = p.y;
+    }
+    goal = {
+      cx: ((x0 + x1) / 2) * VW,
+      cy: ((y0 + y1) / 2) * VH,
+      side: Math.max((x1 - x0) * VW, (y1 - y0) * VH) * FACE_ZOOM,
+    };
+  }
+  if (!faceCrop) faceCrop = { ...goal };
+  for (const k of ['cx', 'cy', 'side']) faceCrop[k] = lerp(faceCrop[k], goal[k], FACE_SMOOTH);
+
+  // 카메라 프레임 밖으로 나가지 않게 정리
+  const side = Math.min(faceCrop.side, VW, VH);
+  return {
+    v,
+    side,
+    sx: constrain(faceCrop.cx - side / 2, 0, VW - side),
+    sy: constrain(faceCrop.cy - side / 2, 0, VH - side),
+  };
+}
+
+// (cx, cy) 중심, 한 변 size 인 정사각형에 얼굴을 거울처럼 좌우 반전해 그림
+function drawFace(crop, cx, cy, size) {
+  const ctx = drawingContext;
+  ctx.save();
+  ctx.translate(cx + size / 2, cy - size / 2);
+  ctx.scale(-1, 1);
+  ctx.drawImage(crop.v, crop.sx, crop.sy, crop.side, crop.side, 0, 0, size, size);
+  ctx.restore();
+}
+
+function drawCenterFace(crop) {
+  if (crop) drawFace(crop, CLOCK_X, CLOCK_Y, CENTER_FACE);
+}
+
+// ===== 시간 표시 =====
+// 지금 '시'에 해당하는 숫자 칸과, '분'에 가장 가까운 숫자 칸(5분 단위) 의 카메라가 파란색으로 바뀜.
+// 예) 4:12 → 4 와 2(10분) 칸이 파랑, 4:58 → 4 와 12 칸이 파랑. 둘이 겹치면(12:00 등) 한 칸만 파랑.
+// ?time=10:08 처럼 주면 그 시각에서 시작해 흘러감 (촬영·테스트용)
+let timeOffsetMs = 0;
+{
+  const q = new URLSearchParams(location.search).get('time');
+  const m = q && q.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    const d = new Date();
+    d.setHours(+m[1], +m[2], 0, 0);
+    timeOffsetMs = d.getTime() - Date.now();
+  }
+}
+
+const SWAP_MS = 2000; // 시·분 칸이 겹칠 때 숫자를 번갈아 보여주는 간격
+
+// 파랗게 바뀔 칸과 그 동공에 쓸 숫자. Map<칸 번호, 숫자 문자열> (0 = 12시 칸, 1 = 1시 칸, …)
+//  - 시 칸: 시 (1~12)
+//  - 분 칸: 실제 분 두 자리 (예: 4:12 → 2번 칸 동공에 "12")
+//  - 둘이 같은 칸이면 시와 분을 번갈아 보여줌
+function timeSlots() {
+  const now = new Date(Date.now() + timeOffsetMs);
+  const minutes = now.getMinutes();
+  const min = minutes + now.getSeconds() / 60;
+  const hourSlot = now.getHours() % 12;
+  const minSlot = Math.round(min / 5) % 12;
+  const hourLabel = String(hourSlot === 0 ? 12 : hourSlot);
+  const minLabel = String(minutes).padStart(2, '0');
+
+  const slots = new Map();
+  if (hourSlot === minSlot) {
+    const showHour = Math.floor(millis() / SWAP_MS) % 2 === 0;
+    slots.set(hourSlot, showHour ? hourLabel : minLabel);
+  } else {
+    slots.set(hourSlot, hourLabel);
+    slots.set(minSlot, minLabel);
+  }
+  return slots;
+}
+
+const C_EMPTY = '#E6E6E6'; // 카메라 준비 전, 시간이 아닌 칸의 빈자리 색
+
+// 시간 칸의 눈알을 얼굴과 같은 방식('color' 합성)으로 파랗게 물들임
+// → 밝기는 그대로라 흰자는 희게, 동공은 검게 남고 빨간 테두리·음영이 파란 계열로 바뀜
+function tintEye() {
+  const ctx = drawingContext;
+  ctx.save();
+  tracePath(ctx, 0, 0, RED_PROFILE);
+  ctx.clip();
+  ctx.globalCompositeOperation = 'color';
+  fill(C_BLUE);
+  rect(-160, -160, 320, 320);
+  ctx.restore();
+}
+
+function drawSatFaces(crop, lit) {
+  HOUR_POS.forEach(([gx, gy], i) => {
+    const c = satCenter(eyes[i], gx, gy);
+    const x = c.x - SAT_FACE / 2;
+    const y = c.y - SAT_FACE / 2;
+    if (lit.has(i)) {
+      // 시간 칸: 얼굴은 보이되 원래 파란색(C_BLUE) 한 가지 색으로만
+      // 1) 'saturation' 합성으로 회색 덮어 흑백으로 만들고
+      // 2) 'multiply' 합성으로 파랑을 곱함 → 밝은 곳 = 정확히 C_BLUE, 어두운 곳 = 검정
+      if (crop) {
+        drawFace(crop, c.x, c.y, SAT_FACE);
+        const ctx = drawingContext;
+        ctx.save();
+        ctx.globalCompositeOperation = 'saturation';
+        fill(128);
+        rect(x, y, SAT_FACE, SAT_FACE);
+        ctx.globalCompositeOperation = 'multiply';
+        fill(C_BLUE);
+        rect(x, y, SAT_FACE, SAT_FACE);
+        ctx.restore();
+      } else {
+        fill(C_BLUE);
+        rect(x, y, SAT_FACE, SAT_FACE);
+      }
+    } else if (crop) {
+      drawFace(crop, c.x, c.y, SAT_FACE);
+    } else {
+      fill(C_EMPTY);
+      rect(x, y, SAT_FACE, SAT_FACE);
+    }
+  });
 }
 
 // ===== 오른쪽 위 카메라 미리보기 =====
@@ -474,6 +649,20 @@ function drawEye(e) {
   disc(IRIS_R, C_BLUE);
   disc(PUPIL_R, C_PUPIL);
 
+  // 동공 위 숫자 (시간 칸만): 동공과 같은 구 표면 위에 붙여서 눈알과 함께 돌아가게 함
+  const h = Math.sqrt(R * R - PUPIL_R * PUPIL_R);
+  if (e.label) {
+  push();
+  applyMatrix(u[0], u[1], v[0], v[1], a * h, b * h);
+  fill(C_NUM);
+  textFont(NUM_FONT);
+  textStyle(BOLD);
+  textAlign(CENTER, CENTER);
+  textSize(e.label.length > 1 ? NUM_SIZE_2 : NUM_SIZE_1);
+  text(e.label, 0, NUM_OFFSET_Y);
+  pop();
+  }
+
   image(shadeImg, -shadeImg.width / 2, -shadeImg.height / 2);
 
   // 반사광: 각막 위면 각막 반사, 벗어나면 흰자 반사. 경계에선 부드럽게 섞음
@@ -548,6 +737,7 @@ function keyPressed() {
   if (key === 'd' || key === 'D') showDebug = !showDebug;
   if (key === 'v' || key === 'V') document.getElementById('cam-preview').classList.toggle('hidden');
   if (key === 'b' || key === 'B') manualBlinkUntil = millis() + 150;
+  if (key === 'c' || key === 'C') showFaces = !showFaces;
 }
 
 function drawDebug() {
