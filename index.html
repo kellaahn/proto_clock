@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Eye Clock</title>
+  <link rel="stylesheet" href="style.css?v=1" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+</head>
+<body>
+  <!-- 오른쪽 위 카메라 미리보기 (V 키로 켜기/끄기) -->
+  <div id="cam-preview">
+    <canvas id="cam-canvas" width="640" height="480"></canvas>
+    <div id="cam-caption">카메라 준비 중…</div>
+  </div>
+  <script type="module" src="tracker.js?v=1"></script>
+  <script src="sketch.js?v=1"></script>
+</body>
+</html>

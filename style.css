@@ -1,0 +1,50 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 1920×1080 캔버스를 비율 유지한 채 화면에 맞춤 */
+main canvas {
+  display: block;
+  width: min(100vw, calc(100vh * 16 / 9)) !important;
+  height: auto !important;
+}
+
+/* ===== 오른쪽 위 카메라 미리보기 ===== */
+#cam-preview {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: min(320px, 28vw);
+  z-index: 10;
+  pointer-events: none;
+}
+
+#cam-preview.hidden {
+  display: none;
+}
+
+#cam-canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+  background: #111;
+  border: 1px solid #000;
+}
+
+#cam-caption {
+  margin-top: 6px;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif;
+  color: #222;
+  font-variant-numeric: tabular-nums;
+}
